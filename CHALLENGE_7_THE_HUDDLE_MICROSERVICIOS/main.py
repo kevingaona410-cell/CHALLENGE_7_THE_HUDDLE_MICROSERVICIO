@@ -1,3 +1,4 @@
+# Cliente principal para la tienda Penguin Shop
 import requests
 import os
 
@@ -9,7 +10,10 @@ INVENTARIO_URL = "http://inventario-service:5001" if DOCKER_MODE else "http://lo
 PEDIDOS_URL = "http://servicio-pedidos:5002" if DOCKER_MODE else "http://localhost:5002"
 
 def registrar():
-    print("\n── Registro ──")
+    """
+    Registra un nuevo usuario en el sistema.
+    """
+    print("\n--- Registro ---")
     nombre   = input("Nombre: ")
     password = input("Contraseña: ")
 
@@ -19,13 +23,16 @@ def registrar():
     })
 
     if res.status_code == 201:
-        print(f"✓ Usuario creado correctamente")
+        print("Usuario creado correctamente")
     else:
-        print(f"✗ Error: {res.json().get('error')}")
+        print(f"Error: {res.json().get('error')}")
 
 
 def iniciar_sesion():
-    print("\n── Inicio de sesión ──")
+    """
+    Inicia sesión de un usuario y devuelve el token si es exitoso.
+    """
+    print("\n--- Inicio de sesión ---")
     nombre   = input("Nombre: ")
     password = input("Contraseña: ")
 
@@ -37,14 +44,17 @@ def iniciar_sesion():
     if res.status_code == 200:
         data  = res.json()
         token = data.get("token")
-        print(f"✓ {data.get('mensaje')}")
+        print(data.get('mensaje'))
         print(f"  Token: {token}")
         return token
     else:
-        print(f"✗ Error: {res.json().get('error')}")
+        print(f"Error: {res.json().get('error')}")
         return None
 
 def menu_usuario(token):
+    """
+    Menú principal para usuarios autenticados.
+    """
     while True:
         print("\n=== Gestión de Penguin Shop ===")
         print("1. Ver Catálogo de Productos")
@@ -66,6 +76,9 @@ def menu_usuario(token):
         elif op == "5":
             break
 def menu_principal():
+    """
+    Menú principal de la aplicación.
+    """
     while True:
         print("\n=== Penguin Shop ===")
         print("1. Registrarse")
@@ -83,7 +96,10 @@ def menu_principal():
             break
             
 def agregar_producto(token):
-    print("\n── Registrar Nuevo Producto ──")
+    """
+    Agrega un nuevo producto al inventario.
+    """
+    print("\n--- Registrar Nuevo Producto ---")
     nombre = input("Nombre del producto: ")
     precio = input("Precio: ")
     stock  = input("Cantidad inicial: ")
@@ -103,15 +119,18 @@ def agregar_producto(token):
         res = requests.post(f"{INVENTARIO_URL}/productos", json=data, headers=headers)
         
         if res.status_code == 201:
-            print("✅ Producto registrado con éxito en el inventario.")
+            print("Producto registrado con éxito en el inventario.")
         else:
-            print(f"❌ Error ({res.status_code}): {res.json().get('errores' or 'error')}")
+            print(f"Error ({res.status_code}): {res.json().get('errores' or 'error')}")
             
     except requests.exceptions.ConnectionError:
-        print("🚨 Error de conexión: ¿Está el servicio de inventario activo en Docker?")
+        print("Error de conexión: ¿Está el servicio de inventario activo en Docker?")
         
 def ver_productos(token):
-    print("\n── Catálogo de Productos ──")
+    """
+    Muestra el catálogo de productos disponibles.
+    """
+    print("\n--- Catálogo de Productos ---")
     
     # El "pasaporte" para entrar al inventario
     headers = {"Authorization": f"Bearer {token}"}
@@ -132,12 +151,15 @@ def ver_productos(token):
                 for p in productos:
                     print(f"{p['id']:<4} | {p['nombre']:<20} | {p['precio']:<10} | {p['stock']:<8} | {p['tipo']}")
         else:
-            print(f"❌ Error ({res.status_code}): {res.json().get('error')}")
+            print(f"Error ({res.status_code}): {res.json().get('error')}")
 
     except requests.exceptions.ConnectionError:
-        print("🚨 Error: No se pudo conectar con el servicio de inventario.")
+        print("Error: No se pudo conectar con el servicio de inventario.")
 
 def realizar_pedido(token):
+    """
+    Permite al usuario realizar un pedido seleccionando productos y cantidades.
+    """
     headers = {"Authorization": f"Bearer {token}"}
     
     # Primero mostramos qué hay para comprar
@@ -181,11 +203,14 @@ def realizar_pedido(token):
                 msg = res.json().get('error', 'Error desconocido')
             except:
                 msg = "El servidor devolvió un error interno (no es JSON)"
-            print(f"❌ Error al crear pedido: {msg}")
+            print(f"Error al crear pedido: {msg}")
     except requests.exceptions.ConnectionError:
-        print("🚨 El servicio de pedidos no responde.")
+        print("El servicio de pedidos no responde.")
 
 def ver_mis_pedidos(token):
+    """
+    Muestra los pedidos realizados por el usuario.
+    """
     print("\n── Mis Órdenes ──")
     headers = {"Authorization": f"Bearer {token}"}
     

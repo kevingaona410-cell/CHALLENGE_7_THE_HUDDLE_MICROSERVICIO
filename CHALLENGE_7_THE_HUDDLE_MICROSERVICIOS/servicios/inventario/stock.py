@@ -1,6 +1,9 @@
 import sqlite3
 
 def iniciar_db():
+    """
+    Inicializa la base de datos creando la tabla stock si no existe.
+    """
     conn = sqlite3.connect("inventario.db")
     cursor = conn.cursor()
     

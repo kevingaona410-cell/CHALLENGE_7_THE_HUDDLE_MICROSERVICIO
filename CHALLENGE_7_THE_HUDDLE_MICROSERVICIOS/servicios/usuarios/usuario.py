@@ -11,6 +11,9 @@ SECRET = os.environ.get("JWT_SECRET", "clave_mega_secreto_y_es_123")
 
 
 def hash_password(password):
+    """
+    Hashea la contraseña usando SHA256.
+    """
     return hashlib.sha256(password.encode()).hexdigest()
 
 
@@ -18,6 +21,9 @@ def hash_password(password):
 
 @app.route("/registro", methods=["POST"])
 def registro():
+    """
+    Registra un nuevo usuario.
+    """
     data     = request.get_json()
     nombre   = data.get("nombre")
     password = data.get("password")
@@ -46,6 +52,9 @@ def registro():
 
 @app.route("/login", methods=["POST"])
 def login():
+    """
+    Inicia sesión y devuelve un token JWT si las credenciales son correctas.
+    """
     data     = request.get_json()
     nombre   = data.get("nombre")
     password = data.get("password")

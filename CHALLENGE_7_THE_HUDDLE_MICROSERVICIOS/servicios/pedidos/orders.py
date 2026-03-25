@@ -1,6 +1,9 @@
 import sqlite3
 
 def crear_tabla_pedidos():
+    """
+    Crea las tablas de pedidos y pedido_detalle en la base de datos.
+    """
     conexion = sqlite3.connect('pedidos.db')
     cursor = conexion.cursor()
 

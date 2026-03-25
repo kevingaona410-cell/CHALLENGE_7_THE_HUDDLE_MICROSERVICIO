@@ -6,11 +6,18 @@ app = Flask(__name__)
 SECRET_KEY = "clave_mega_secreto_y_es_123"
 
 def obtener_conn():
+    """
+    Obtiene una conexión a la base de datos inventario.db
+    """
     conn = sqlite3.connect("inventario.db")
     conn.row_factory = sqlite3.Row
     return conn
 
 def verificar_token():
+    """
+    Verifica el token JWT en el header Authorization.
+    Devuelve el payload decodificado o error.
+    """
     auth = request.headers.get("Authorization")
 
     if not auth or not auth.startswith("Bearer "):
@@ -31,6 +38,10 @@ def verificar_token():
 
 @app.route("/productos", methods=["POST"])
 def crear_productos():
+    """
+    Crea un nuevo producto en el inventario.
+    Requiere token de autenticación.
+    """
     decoded, error_response, status_code = verificar_token()
     
     if error_response:
@@ -103,6 +114,10 @@ def crear_productos():
 
 @app.route("/productos", methods=["GET"])
 def obtener_productos():
+    """
+    Obtiene la lista de todos los productos.
+    Requiere token de autenticación.
+    """
     decoded, error_response, status_code = verificar_token()
     if error_response:
         return error_response, status_code
@@ -120,6 +135,10 @@ def obtener_productos():
 
 @app.route("/productos/<int:id>", methods=["GET"])
 def obtener_producto(id):
+    """
+    Obtiene un producto específico por ID.
+    Requiere token de autenticación.
+    """
     decoded, error_response, status_code = verificar_token()
     if error_response:
         return error_response, status_code
@@ -139,6 +158,10 @@ def obtener_producto(id):
 
 @app.route("/productos/<int:id>/stock", methods=["GET"])
 def obtener_stock(id):
+    """
+    Obtiene el stock de un producto específico.
+    Requiere token de autenticación.
+    """
     decoded, error_response, status_code = verificar_token()
     if error_response:
         return error_response, status_code
@@ -158,6 +181,10 @@ def obtener_stock(id):
 
 @app.route("/productos/<int:id>/stock", methods=["PUT"])
 def actualizar_stock(id):
+    """
+    Actualiza el stock de un producto (suma o resta cantidad).
+    Requiere token de autenticación.
+    """
     decoded, error_response, status_code = verificar_token()
     if error_response:
         return error_response, status_code

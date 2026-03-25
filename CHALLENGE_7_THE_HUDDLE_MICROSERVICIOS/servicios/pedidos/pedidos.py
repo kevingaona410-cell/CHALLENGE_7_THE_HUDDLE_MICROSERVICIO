@@ -14,11 +14,18 @@ SECRET_KEY = os.getenv("SECRET_KEY", "clave_mega_secreto_y_es_123")
 INVENTARIO_URL = os.getenv("INVENTARIO_URL", "http://localhost:5001")
 
 def obtener_conn():
+    """
+    Obtiene una conexión a la base de datos pedidos.db
+    """
     conn = sqlite3.connect("pedidos.db")
     conn.row_factory = sqlite3.Row
     return conn
 
 def verificar_token():
+    """
+    Verifica el token JWT en el header Authorization.
+    Devuelve el payload decodificado o error.
+    """
     auth = request.headers.get("Authorization")
 
     if not auth or not auth.startswith("Bearer "):
@@ -37,6 +44,11 @@ def verificar_token():
 
 @app.route("/pedidos", methods=["POST"])
 def crear_pedido():
+    """
+    Crea un nuevo pedido con los items especificados.
+    Valida stock y actualiza inventario.
+    Requiere token de autenticación.
+    """
     decoded, error, status = verificar_token()
     if error:
         return error, status
@@ -137,6 +149,9 @@ def crear_pedido():
 
 @app.route("/pedidos", methods=["GET"])
 def listar_pedidos():
+    """
+    Lista los pedidos del usuario autenticado.
+    """
     decoded, error, status = verificar_token()
     if error:
         return error, status
