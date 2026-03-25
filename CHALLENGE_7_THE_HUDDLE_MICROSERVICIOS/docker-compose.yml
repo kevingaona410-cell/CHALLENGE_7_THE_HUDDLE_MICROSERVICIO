@@ -1,0 +1,40 @@
+﻿version: '3.8'
+
+services:
+  auth-service:
+    build: ./servicios/usuarios
+    container_name: servicio-user
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=development
+      - JWT_SECRET=clave_mega_secreto_y_es_123
+    volumes:
+      - ./servicios/usuarios:/app
+  
+  inventario-service:
+    build: ./servicios/inventario
+    container_name: servicio-inventario
+    ports:
+      - "5001:5001"
+    depends_on:
+      - auth-service
+    environment:
+      - FLASK_ENV=development
+      - JWT_SECRET=clave_mega_secreto_y_es_123
+    volumes:
+      - ./servicios/inventario:/app
+  
+  pedidos-service:
+    build: ./servicios/pedidos
+    container_name: servicio-pedidos
+    ports:
+      - "5002:5002"
+    depends_on:
+      - auth-service
+      - inventario-service
+    environment:
+      - SECRET_KEY=clave_mega_secreto_y_es_123
+      - INVENTARIO_URL=http://servicio-inventario:5001
+    volumes:
+      - ./servicios/pedidos:/app

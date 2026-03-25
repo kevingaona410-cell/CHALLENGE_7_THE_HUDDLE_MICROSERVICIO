@@ -1,0 +1,12 @@
+.venv
+# Ignorar archivos generados
+*.pyc
+__pycache__/
+.env
+
+# Ignorar base de datos y Docker local
+servicios/usuarios/usuarios.db
+
+servicios/inventario/inventario.db
+
+servicios/pedidos/pedidos.db
