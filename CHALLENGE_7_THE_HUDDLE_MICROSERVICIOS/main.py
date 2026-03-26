@@ -1,231 +1,171 @@
-# Cliente principal para la tienda Penguin Shop
 import requests
 import os
+import logging
+from pybreaker import CircuitBreaker, CircuitBreakerError
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
-# Detectamos si estamos dentro de la red de Docker o en Windows local
-DOCKER_MODE = os.getenv("DOCKER_ENV")
+# --- CONFIGURACIÓN DE LOGGING ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - [%(name)s] - %(levelname)s: %(message)s'
+)
+logger = logging.getLogger("PenguinShop_Client")
 
-AUTH_URL = "http://auth-service:5000" if DOCKER_MODE else "http://localhost:5000"
-INVENTARIO_URL = "http://inventario-service:5001" if DOCKER_MODE else "http://localhost:5001"
-PEDIDOS_URL = "http://servicio-pedidos:5002" if DOCKER_MODE else "http://localhost:5002"
+# --- VARIABLES DE ENTORNO ---
+MODO_DOCKER = os.getenv("DOCKER_ENV")
+URL_AUTH = "http://auth-service:5000" if MODO_DOCKER else "http://localhost:5000"
+URL_INVENTARIO = "http://inventario-service:5001" if MODO_DOCKER else "http://localhost:5001"
+URL_PEDIDOS = "http://servicio-pedidos:5002" if MODO_DOCKER else "http://localhost:5002"
+
+# --- CONFIGURACIÓN DE CIRCUIT BREAKERS ---
+# Falla tras 5 errores, espera 30 seg para reintentar (estado semi-abierto)
+breaker_auth = CircuitBreaker(fail_max=5, reset_timeout=30, name="AUTH_CB")
+breaker_inv = CircuitBreaker(fail_max=5, reset_timeout=30, name="INV_CB")
+breaker_ped = CircuitBreaker(fail_max=5, reset_timeout=30, name="PED_CB")
+
+# --- DECORADOR DE RETRY ---
+# Reintenta 3 veces con espera exponencial (1s, 2s, 4s...) solo si hay error de conexión
+retry_config = retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    retry=retry_if_exception_type(requests.exceptions.RequestException),
+    before_sleep=lambda retry_state: logger.info(f"🔄 Reintentando conexión... Intento {retry_state.attempt_number}")
+)
+
+# --- FUNCIÓN NÚCLEO DE RESILIENCIA ---
+
+def peticion_segura(metodo, url, cb, **kwargs):
+    """
+    Encapsula la lógica de Circuit Breaker y Retry.
+    Primero intenta el Retry. Si falla 3 veces, el CB cuenta 1 fallo.
+    """
+    @retry_config
+    def ejecutar_con_reintento():
+        return cb.call(metodo, url, **kwargs)
+    
+    try:
+        return ejecutar_con_reintento()
+    except CircuitBreakerError:
+        logger.error(f"🚨 Circuito {cb.name} ABIERTO. Abortando petición a {url}")
+        raise Exception("Servicio temporalmente fuera de servicio (Circuit Breaker)")
+    except Exception as e:
+        # Aquí llegan los errores después de agotar los 3 reintentos
+        raise e
+
+# --- FUNCIONES DE SERVICIO ---
 
 def registrar():
-    """
-    Registra un nuevo usuario en el sistema.
-    """
     print("\n--- Registro ---")
-    nombre   = input("Nombre: ")
-    password = input("Contraseña: ")
-
-    res = requests.post(f"{AUTH_URL}/registro", json={
-        "nombre": nombre,
-        "password": password
-    })
-
-    if res.status_code == 201:
-        print("Usuario creado correctamente")
-    else:
-        print(f"Error: {res.json().get('error')}")
-
+    nombre = input("Nombre: ")
+    pw = input("Contraseña: ")
+    try:
+        res = peticion_segura(requests.post, f"{URL_AUTH}/registro", breaker_auth, 
+                             json={"nombre": nombre, "password": pw}, timeout=5)
+        if res.status_code == 201:
+            print("✓ Usuario creado correctamente")
+        else:
+            print(f"❌ Error: {res.json().get('error')}")
+    except Exception as e:
+        print(f"🚨 Error: {e}")
 
 def iniciar_sesion():
-    """
-    Inicia sesión de un usuario y devuelve el token si es exitoso.
-    """
     print("\n--- Inicio de sesión ---")
-    nombre   = input("Nombre: ")
-    password = input("Contraseña: ")
-
-    res = requests.post(f"{AUTH_URL}/login", json={
-        "nombre": nombre,
-        "password": password
-    })
-
-    if res.status_code == 200:
-        data  = res.json()
-        token = data.get("token")
-        print(data.get('mensaje'))
-        print(f"  Token: {token}")
-        return token
-    else:
-        print(f"Error: {res.json().get('error')}")
-        return None
-
-def menu_usuario(token):
-    """
-    Menú principal para usuarios autenticados.
-    """
-    while True:
-        print("\n=== Gestión de Penguin Shop ===")
-        print("1. Ver Catálogo de Productos")
-        print("2. Agregar Producto al Inventario")
-        print("3. REALIZAR COMPRA (Pedido)")
-        print("4. Ver Mis Pedidos")
-        print("5. Cerrar Sesión")
-        
-        op = input("\nSeleccioná: ").strip()
-        
-        if op == "1":
-            ver_productos(token) 
-        elif op == "2":
-            agregar_producto(token)
-        elif op == "3":
-            realizar_pedido(token)
-        elif op == "4":
-            ver_mis_pedidos(token)
-        elif op == "5":
-            break
-def menu_principal():
-    """
-    Menú principal de la aplicación.
-    """
-    while True:
-        print("\n=== Penguin Shop ===")
-        print("1. Registrarse")
-        print("2. Iniciar sesión")
-        print("3. Salir")
-        
-        opcion = input("\nSeleccioná: ")
-        if opcion == "1":
-            registrar()
-        elif opcion == "2":
-            token = iniciar_sesion()
-            if token:
-                menu_usuario(token)
-        elif opcion == "3":
-            break
-            
-def agregar_producto(token):
-    """
-    Agrega un nuevo producto al inventario.
-    """
-    print("\n--- Registrar Nuevo Producto ---")
-    nombre = input("Nombre del producto: ")
-    precio = input("Precio: ")
-    stock  = input("Cantidad inicial: ")
-    tipo   = input("Categoría (ej. Ropa, Alimento): ")
-
-    # Construimos el Header con el Token
-    headers = {"Authorization": f"Bearer {token}"}
-    
-    data = {
-        "nombre": nombre,
-        "precio": precio,
-        "stock": stock,
-        "tipo": tipo
-    }
-
+    nombre = input("Nombre: ")
+    pw = input("Contraseña: ")
     try:
-        res = requests.post(f"{INVENTARIO_URL}/productos", json=data, headers=headers)
-        
-        if res.status_code == 201:
-            print("Producto registrado con éxito en el inventario.")
-        else:
-            print(f"Error ({res.status_code}): {res.json().get('errores' or 'error')}")
-            
-    except requests.exceptions.ConnectionError:
-        print("Error de conexión: ¿Está el servicio de inventario activo en Docker?")
-        
-def ver_productos(token):
-    """
-    Muestra el catálogo de productos disponibles.
-    """
-    print("\n--- Catálogo de Productos ---")
-    
-    # El "pasaporte" para entrar al inventario
-    headers = {"Authorization": f"Bearer {token}"}
-
-    try:
-        res = requests.get(f"{INVENTARIO_URL}/productos", headers=headers)
-
+        res = peticion_segura(requests.post, f"{URL_AUTH}/login", breaker_auth, 
+                             json={"nombre": nombre, "password": pw}, timeout=5)
         if res.status_code == 200:
-            data = res.json()
-            productos = data.get("products", [])
-            
-            if not productos:
-                print("El inventario está vacío.")
-            else:
-                # Imprimimos una tabla simple para Jopara Studios
-                print(f"{'ID':<4} | {'Nombre':<20} | {'Precio':<10} | {'Stock':<8} | {'Tipo'}")
-                print("-" * 60)
-                for p in productos:
-                    print(f"{p['id']:<4} | {p['nombre']:<20} | {p['precio']:<10} | {p['stock']:<8} | {p['tipo']}")
+            datos = res.json()
+            print(f"✓ {datos.get('mensaje')}")
+            return datos.get("token")
         else:
-            print(f"Error ({res.status_code}): {res.json().get('error')}")
+            print(f"❌ Error: {res.json().get('error')}")
+    except Exception as e:
+        print(f"🚨 Error de conexión en login: {e}")
+    return None
 
-    except requests.exceptions.ConnectionError:
-        print("Error: No se pudo conectar con el servicio de inventario.")
+def ver_productos(token):
+    print("\n--- Catálogo de Productos ---")
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        res = peticion_segura(requests.get, f"{URL_INVENTARIO}/productos", breaker_inv, 
+                             headers=headers, timeout=5)
+        if res.status_code == 200:
+            productos = res.json().get("products", [])
+            print(f"{'ID':<4} | {'Nombre':<20} | {'Precio':<10} | {'Stock':<8}")
+            print("-" * 50)
+            for p in productos:
+                print(f"{p['id']:<4} | {p['nombre']:<20} | {p['precio']:<10} | {p['stock']:<8}")
+        else:
+            print(f"❌ Error: {res.status_code}")
+    except Exception as e:
+        print(f"🚨 Catálogo no disponible: {e}")
 
 def realizar_pedido(token):
-    """
-    Permite al usuario realizar un pedido seleccionando productos y cantidades.
-    """
     headers = {"Authorization": f"Bearer {token}"}
-    
-    # Primero mostramos qué hay para comprar
-    print("\n--- Productos Disponibles ---")
     try:
-        res_inv = requests.get(f"{INVENTARIO_URL}/productos", headers=headers)
-        if res_inv.status_code != 200:
-            print("No se pudo obtener el inventario.")
-            return
-        
+        res_inv = peticion_segura(requests.get, f"{URL_INVENTARIO}/productos", breaker_inv, 
+                                 headers=headers, timeout=5)
         productos = res_inv.json().get("products", [])
         for p in productos:
-            print(f"ID: {p['id']} | {p['nombre']} | Precio: {p['precio']} | Stock: {p['stock']}")
-    except:
-        print("Error de conexión con inventario.")
+            print(f"ID: {p['id']} | {p['nombre']} | Stock: {p['stock']}")
+    except Exception as e:
+        print(f"🚨 No se puede acceder al inventario: {e}")
         return
 
-    # Proceso de armado de "carrito"
-    items = []
-    print("\n(Escribí 'fin' en el ID para terminar de agregar items)")
+    elementos = []
     while True:
-        prod_id = input("ID del producto a comprar: ")
-        if prod_id.lower() == 'fin': break
-        
-        cantidad = input(f"Cantidad para el ID {prod_id}: ")
+        id_p = input("ID (o 'fin'): ")
+        if id_p.lower() == 'fin': break
+        cant = input("Cantidad: ")
+        elementos.append({"producto_id": id_p, "cantidad": int(cant)})
+
+    if elementos:
         try:
-            items.append({"producto_id": prod_id, "cantidad": int(cantidad)})
-        except ValueError:
-            print("Cantidad inválida.")
-
-    if not items:
-        print("Pedido cancelado: carrito vacío.")
-        return
-
-    # Envío al servicio de pedidos
-    try:
-        res = requests.post(f"{PEDIDOS_URL}/pedidos", json={"items": items}, headers=headers)
-        # En lugar de print(f"❌ Error: {res.json().get('error')}")
-        if res.status_code != 201:
-            try:
-                msg = res.json().get('error', 'Error desconocido')
-            except:
-                msg = "El servidor devolvió un error interno (no es JSON)"
-            print(f"Error al crear pedido: {msg}")
-    except requests.exceptions.ConnectionError:
-        print("El servicio de pedidos no responde.")
+            res = peticion_segura(requests.post, f"{URL_PEDIDOS}/pedidos", breaker_ped, 
+                                 json={"items": elementos}, headers=headers, timeout=10)
+            if res.status_code == 201:
+                print(f"✓ Pedido ID {res.json().get('pedido_id')} creado.")
+            else:
+                print(f"❌ Error: {res.json().get('error')}")
+        except Exception as e:
+            print(f"🚨 Servicio de pedidos caído: {e}")
 
 def ver_mis_pedidos(token):
-    """
-    Muestra los pedidos realizados por el usuario.
-    """
     print("\n── Mis Órdenes ──")
     headers = {"Authorization": f"Bearer {token}"}
-    
     try:
-        res = requests.get(f"{PEDIDOS_URL}/pedidos", headers=headers)
+        res = peticion_segura(requests.get, f"{URL_PEDIDOS}/pedidos", breaker_ped, 
+                             headers=headers, timeout=5)
         if res.status_code == 200:
-            pedidos = res.json().get("pedidos", [])
-            if not pedidos:
-                print("No tenés pedidos registrados.")
-            else:
-                for ped in pedidos:
-                    print(f"ID Pedido: {ped['id'][:8]}... | Total: ${ped['total']} | Estado: {ped['estado']}")
-        else:
-            print(f"Error: {res.json().get('error')}")
+            for ped in res.json().get("pedidos", []):
+                print(f"ID: {ped['id'][:8]}... | Total: ${ped['total']} | Estado: {ped['estado']}")
     except Exception as e:
-        print(f"Error de conexión: {e}")
+        print(f"🚨 Error al recuperar pedidos: {e}")
+
+# --- MENÚS ---
+
+def menu_usuario(token):
+    while True:
+        print("\n=== Gestión de Penguin Shop ===")
+        print("1. Catálogo | 2. Agregar Producto | 3. Comprar | 4. Mis Pedidos | 5. Salir")
+        op = input("\nSeleccioná: ")
+        if op == "1": ver_productos(token)
+        elif op == "3": realizar_pedido(token)
+        elif op == "4": ver_mis_pedidos(token)
+        elif op == "5": break
+
+def menu_principal():
+    while True:
+        print("\n=== Penguin Shop ===")
+        print("1. Registrarse | 2. Login | 3. Salir")
+        op = input("\nSeleccioná: ")
+        if op == "1": registrar()
+        elif op == "2":
+            tk = iniciar_sesion()
+            if tk: menu_usuario(tk)
+        elif op == "3": break
+
 if __name__ == "__main__":
     menu_principal()

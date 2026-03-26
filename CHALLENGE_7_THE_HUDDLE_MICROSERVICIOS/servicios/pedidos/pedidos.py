@@ -5,37 +5,50 @@ import jwt
 import datetime
 import requests
 import os
-from orders import crear_tabla_pedidos # Importa tu función de creación
+import logging
+from pybreaker import CircuitBreaker
+from orders import crear_tabla_pedidos
+
+# Configurar logging en español
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - [%(name)s] - %(levelname)s: %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Variables de entorno - Unificadas para consistencia con el auth-service
-SECRET_KEY = os.getenv("SECRET_KEY", "clave_mega_secreto_y_es_123")
-INVENTARIO_URL = os.getenv("INVENTARIO_URL", "http://localhost:5001")
+# Variables de entorno
+CLAVE_SECRETA = os.getenv("SECRET_KEY", "clave_mega_secreto_y_es_123")
+URL_INVENTARIO = os.getenv("INVENTARIO_URL", "http://localhost:5001")
 
-def obtener_conn():
+# Disyuntor de circuito para el servicio de inventario
+disyuntor_inventario = CircuitBreaker(fail_max=5, reset_timeout=30, name="inventario")
+
+def obtener_conexion():
     """
     Obtiene una conexión a la base de datos pedidos.db
     """
-    conn = sqlite3.connect("pedidos.db")
-    conn.row_factory = sqlite3.Row
-    return conn
+    conexion = sqlite3.connect("pedidos.db")
+    conexion.row_factory = sqlite3.Row
+    return conexion
+
 
 def verificar_token():
     """
     Verifica el token JWT en el header Authorization.
     Devuelve el payload decodificado o error.
     """
-    auth = request.headers.get("Authorization")
+    autenticacion = request.headers.get("Authorization")
 
-    if not auth or not auth.startswith("Bearer "):
+    if not autenticacion or not autenticacion.startswith("Bearer "):
         return None, jsonify({"error": "Token faltante"}), 401
 
-    token = auth.split(" ")[1]
+    token = autenticacion.split(" ")[1]
 
     try:
-        decoded = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-        return decoded, None, None
+        decodificado = jwt.decode(token, CLAVE_SECRETA, algorithms=["HS256"])
+        return decodificado, None, None
     except jwt.ExpiredSignatureError:
         return None, jsonify({"error": "Token expirado"}), 401
     except jwt.InvalidTokenError:
@@ -45,56 +58,63 @@ def verificar_token():
 @app.route("/pedidos", methods=["POST"])
 def crear_pedido():
     """
-    Crea un nuevo pedido con los items especificados.
+    Crea un nuevo pedido con los elementos especificados.
     Valida stock y actualiza inventario.
     Requiere token de autenticación.
     """
-    decoded, error, status = verificar_token()
+    decodificado, error, estado = verificar_token()
     if error:
-        return error, status
+        return error, estado
 
-    data = request.get_json()
+    datos = request.get_json()
 
-    if not data or "items" not in data:
-        return jsonify({"error": "Debe enviar items"}), 400
+    if not datos or "items" not in datos:
+        return jsonify({"error": "Debe enviar elementos"}), 400
 
-    items = data["items"]
-    if not isinstance(items, list) or len(items) == 0:
-        return jsonify({"error": "Items inválidos"}), 400
+    elementos = datos["items"]
+    if not isinstance(elementos, list) or len(elementos) == 0:
+        return jsonify({"error": "Elementos inválidos"}), 400
 
     detalles = []
     total = 0
 
     # VALIDAR STOCK PRIMERO
-    for item in items:
-        producto_id = item.get("producto_id")
-        cantidad = item.get("cantidad")
+    for elemento in elementos:
+        id_producto = elemento.get("producto_id")
+        cantidad = elemento.get("cantidad")
 
-        if not producto_id or not cantidad:
-            return jsonify({"error": "Item inválido"}), 400
+        if not id_producto or not cantidad:
+            return jsonify({"error": "Elemento inválido"}), 400
 
         try:
             cantidad = int(cantidad)
         except:
             return jsonify({"error": "Cantidad inválida"}), 400
 
-        # Llamar a inventario
+        # Llamar a inventario con disyuntor
         try:
-            res = requests.get(
-                f"{INVENTARIO_URL}/productos/{producto_id}",
-                headers={"Authorization": request.headers.get("Authorization")}
+            logger.info(f"Validando stock para producto {id_producto}")
+            respuesta = disyuntor_inventario.call(
+                requests.get,
+                f"{URL_INVENTARIO}/productos/{id_producto}",
+                headers={"Authorization": request.headers.get("Authorization")},
+                timeout=5
             )
 
-            if res.status_code != 200:
+            if respuesta.status_code != 200:
+                logger.warning(f"Producto {id_producto} no encontrado en inventario")
                 return jsonify({"error": "Producto no encontrado"}), 404
 
-            producto = res.json()["producto"]
+            producto = respuesta.json()["producto"]
+            logger.info(f"Producto {id_producto} validado: stock={producto['stock']}")
 
-        except:
+        except requests.RequestException as e:
+            logger.error(f"Error conectando con inventario: {str(e)}")
             return jsonify({"error": "Error conectando con inventario"}), 500
 
         if producto["stock"] < cantidad:
-            return jsonify({"error": f"Stock insuficiente para {producto_id}"}), 400
+            logger.warning(f"Stock insuficiente para {id_producto}: hay {producto['stock']}, requiere {cantidad}")
+            return jsonify({"error": f"Stock insuficiente para {id_producto}"}), 400
 
         precio = producto["precio"]
         subtotal = precio * cantidad
@@ -102,47 +122,53 @@ def crear_pedido():
         total += subtotal
 
         detalles.append({
-            "producto_id": producto_id,
+            "producto_id": id_producto,
             "cantidad": cantidad,
             "precio": precio
         })
 
     # CREAR PEDIDO
-    pedido_id = str(uuid.uuid4())
+    id_pedido = str(uuid.uuid4())
 
-    conn = obtener_conn()
-    cursor = conn.cursor()
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
 
-    # CORRECCIÓN: Se cambió decoded["id_usuario"] por decoded["user_id"]
     cursor.execute(
         "INSERT INTO pedidos (id, usuario_id, total, estado) VALUES (?, ?, ?, ?)",
-        (pedido_id, decoded["user_id"], total, "pendiente")
+        (id_pedido, decodificado["user_id"], total, "pendiente")
     )
 
     # INSERTAR DETALLES
     for d in detalles:
         cursor.execute(
             "INSERT INTO pedido_detalle (id, pedido_id, producto_id, cantidad, precio_unitario) VALUES (?, ?, ?, ?, ?)",
-            (str(uuid.uuid4()), pedido_id, d["producto_id"], d["cantidad"], d["precio"])
+            (str(uuid.uuid4()), id_pedido, d["producto_id"], d["cantidad"], d["precio"])
         )
 
-    conn.commit()
-    conn.close()
+    conexion.commit()
+    conexion.close()
 
-    # DESCONTAR STOCK
+    # DESCONTAR STOCK - Con disyuntor
     for d in detalles:
         try:
-            requests.put(
-                f"{INVENTARIO_URL}/productos/{d['producto_id']}/stock",
+            logger.info(f"Descontando {d['cantidad']} unidades del producto {d['producto_id']}")
+            respuesta = disyuntor_inventario.call(
+                requests.put,
+                f"{URL_INVENTARIO}/productos/{d['producto_id']}/stock",
                 json={"cantidad": -d["cantidad"]},
-                headers={"Authorization": request.headers.get("Authorization")}
+                headers={"Authorization": request.headers.get("Authorization")},
+                timeout=5
             )
-        except:
-            pass  # simplificado para el challenge
+            if respuesta.status_code == 200:
+                logger.info(f"Stock descontado exitosamente para producto {d['producto_id']}")
+            else:
+                logger.warning(f"Fallo al descontar stock para {d['producto_id']}: {respuesta.status_code}")
+        except requests.RequestException as e:
+            logger.error(f"Error descont stock de {d['producto_id']}: {str(e)}")
 
     return jsonify({
         "mensaje": "Pedido creado",
-        "pedido_id": pedido_id,
+        "pedido_id": id_pedido,
         "total": total
     }), 201
 
@@ -152,21 +178,20 @@ def listar_pedidos():
     """
     Lista los pedidos del usuario autenticado.
     """
-    decoded, error, status = verificar_token()
+    decodificado, error, estado = verificar_token()
     if error:
-        return error, status
+        return error, estado
 
-    conn = obtener_conn()
-    cursor = conn.cursor()
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
 
-    # CORRECCIÓN: Se cambió decoded["id_usuario"] por decoded["user_id"]
-    cursor.execute("SELECT * FROM pedidos WHERE usuario_id = ?", (decoded["user_id"],))
+    cursor.execute("SELECT * FROM pedidos WHERE usuario_id = ?", (decodificado["user_id"],))
     pedidos = [dict(row) for row in cursor.fetchall()]
 
-    conn.close()
+    conexion.close()
 
     return jsonify({"pedidos": pedidos})
 
 if __name__ == "__main__":
-    crear_tabla_pedidos() # Asegura las tablas antes de iniciar Flask
+    crear_tabla_pedidos()
     app.run(host="0.0.0.0", port=5002)
