@@ -9,7 +9,6 @@ import logging
 from pybreaker import CircuitBreaker
 from orders import crear_tabla_pedidos
 
-# Configurar logging en español
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - [%(name)s] - %(levelname)s: %(message)s'
@@ -78,7 +77,7 @@ def crear_pedido():
     detalles = []
     total = 0
 
-    # VALIDAR STOCK PRIMERO
+    # VALIDAR STOCK 
     for elemento in elementos:
         id_producto = elemento.get("producto_id")
         cantidad = elemento.get("cantidad")
@@ -148,7 +147,7 @@ def crear_pedido():
     conexion.commit()
     conexion.close()
 
-    # DESCONTAR STOCK - Con disyuntor
+    # DESCONTAR STOCK 
     for d in detalles:
         try:
             logger.info(f"Descontando {d['cantidad']} unidades del producto {d['producto_id']}")

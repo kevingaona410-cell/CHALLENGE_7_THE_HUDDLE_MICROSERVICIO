@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 import sqlite3
 import jwt
-from stock import iniciar_db # Importante para la consistencia
+from stock import iniciar_db 
 app = Flask(__name__)
 SECRET_KEY = "clave_mega_secreto_y_es_123"
 
@@ -209,7 +209,7 @@ def actualizar_stock(id):
         return jsonify({"error": "Producto no encontrado"}), 404
 
     stock_actual = row["stock"]
-    nuevo_stock = stock_actual + cantidad  # cantidad puede ser negativo para descontar
+    nuevo_stock = stock_actual + cantidad  
 
     if nuevo_stock < 0:
         conn.close()
@@ -222,5 +222,5 @@ def actualizar_stock(id):
     return jsonify({"usuario": decoded, "id": id, "nuevo_stock": nuevo_stock}), 200
 
 if __name__ == "__main__":
-    iniciar_db() # Crea la tabla si no existe antes de arrancar Flask
+    iniciar_db() 
     app.run(host='0.0.0.0', debug=True, port=5001)
